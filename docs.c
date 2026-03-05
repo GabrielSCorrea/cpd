@@ -1,0 +1,214 @@
+#include <stdio.h>
+#include <omp.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define OUTPUT 0
+
+#define FIND(item_offset, num_of_subitens, subitem_offset) ((item_offset * num_of_subitens) + subitem_offset)
+
+int process_input(char* filename, int *c, int *d, int *s, double **scores);
+int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs, double *scores);
+
+int main(int argc, char **argv){
+	double exec_time_serial, exec_time_omp;
+
+	//input file
+	if(argc == 1){
+		printf("Missing input file\n");
+		return -1;
+	}
+	
+	double *scores;
+	int num_of_cabinets, num_of_documents, num_of_subjects;
+
+	// will return a 1D array with all scores.
+	process_input(argv[1], &num_of_cabinets, &num_of_documents, &num_of_subjects, &scores);
+	
+	//1D array of all scores
+	//[D0S0, D0S1, D0S2, D1S0, D1S2...]
+	//array with the cabinet of document equal to the index
+	int *docs_cabs = malloc(num_of_documents * sizeof(int));
+
+	exec_time_omp = -omp_get_wtime();
+	sort_documents_omp(num_of_cabinets, num_of_documents, num_of_subjects, docs_cabs, scores);
+	exec_time_omp += omp_get_wtime();
+	
+	fprintf(stderr, "%.3fs\n", exec_time_omp);
+
+	if(OUTPUT){
+		for(int i = 0; i < num_of_documents; i++){
+			printf("%d\n", docs_cabs[i]);
+		}
+	}
+
+	free(scores);
+	free(docs_cabs);
+
+	return 0;
+}
+
+
+int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs, double *docs_scores){
+	double *cab_scores = calloc(num_cabs * num_subs, sizeof(double)); // subjects scores of each cabinet
+	// documents distances to each cabinet
+	//[D0C0, D0C1, D0C2, D1C0, D1C0 ...]
+	double *doc_distances = calloc(num_docs * num_cabs, sizeof(double));
+	//holds how many documents there is in cabinet with id correspond to index
+	int *num_docs_in_cab = calloc(num_cabs, sizeof(int));
+	int doc_change;
+	
+	#pragma omp parallel
+	{
+		//initial round-robin; 
+		#pragma omp for reduction(+:num_docs_in_cab[:num_cabs])
+		for (int doc = 0; doc < num_docs; doc++){
+			int cab_id = doc % num_cabs;
+			docs_cabs[doc] = cab_id;
+
+			num_docs_in_cab[cab_id] += 1;
+		}
+		
+		
+		#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
+		for(int doc = 0; doc < num_docs; doc++){
+    		int cab_id = doc % num_cabs;
+    		for(int sub = 0; sub < num_subs; sub++)
+        		cab_scores[FIND(cab_id, num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
+		}
+
+		#pragma omp for simd
+		for(int cab_score = 0; cab_score<num_cabs*num_subs; cab_score++){
+			int cab_id = cab_score / num_subs;
+			if(num_docs_in_cab[cab_id] == 0) continue;
+
+			cab_scores[cab_score] /= num_docs_in_cab[cab_id];
+		}
+	}
+		
+
+	//change docs until no changes loop...
+	do{	
+		#pragma omp parallel
+		{
+
+		#pragma omp single
+		doc_change = 0;
+
+		//calculate distances
+		#pragma omp for 
+		for(int doc = 0; doc < num_docs; doc++){
+			for(int cab = 0; cab < num_cabs; cab++){
+				double sum = 0;
+				for(int sub = 0; sub < num_subs; sub++){
+					double dif = docs_scores[FIND(doc, num_subs, sub)] - cab_scores[FIND(cab, num_subs, sub)];
+					sum += dif*dif;
+				}
+				doc_distances[FIND(doc, num_cabs, cab)] = sum; 
+			}
+		}
+
+		//change documents based on distances
+		#pragma omp for
+		for(int doc = 0; doc < num_docs; doc++){
+			double smallest_dist = doc_distances[FIND(doc, num_cabs, docs_cabs[doc])];
+			int closer_cab = docs_cabs[doc];
+			for(int cab = 0; cab<num_cabs; cab++){
+				if( doc_distances[(doc*num_cabs)+cab] < smallest_dist){
+					smallest_dist = doc_distances[FIND(doc, num_cabs, cab)];
+					closer_cab = cab;
+				}
+			}
+
+			#pragma omp critical
+			{
+			if(docs_cabs[doc] != closer_cab){
+				doc_change = 1;
+				//remove one doc from cabinet
+				num_docs_in_cab[docs_cabs[doc]] -= 1;
+				//add one doc to new cab
+				num_docs_in_cab[closer_cab] += 1;
+				//change cab doc is
+				docs_cabs[doc] = closer_cab;
+			}
+
+			}
+		}
+		
+		#pragma omp single
+		memset(cab_scores, 0, num_cabs * num_subs * sizeof(double));
+
+		//calculate new scores
+		#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
+		for(int doc = 0; doc < num_docs; doc++){
+			for(int sub = 0; sub < num_subs; sub++){	
+				cab_scores[FIND(docs_cabs[doc], num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
+			}
+		}
+		
+		#pragma omp for simd 
+		for(int cab_score = 0; cab_score < num_cabs*num_subs; cab_score++){
+			int cab_id = cab_score / num_subs;
+			if(num_docs_in_cab[cab_id] == 0) {
+				cab_scores[cab_score] = 0;
+			}else{
+				cab_scores[cab_score] /= num_docs_in_cab[cab_id];
+			}
+		}
+
+		}
+
+
+	}while(doc_change);
+	
+	free(cab_scores);
+	free(doc_distances);
+	free(num_docs_in_cab);
+
+	return 0;
+}
+
+int process_input(char* filename, int* num_of_cabinets, int* num_of_documents, int* num_of_subjects, double** scores){
+    FILE *file_ptr = fopen(filename, "r");
+    if(file_ptr == NULL){
+        fprintf(stderr, "Error open input file\n");
+        return -1;
+    }
+
+    char reader[100];
+    fgets(reader, 100, file_ptr);
+    sscanf(reader, "%d %d %d", num_of_cabinets, num_of_documents, num_of_subjects);
+
+    *scores = malloc((*num_of_documents) * (*num_of_subjects) * sizeof(double));
+
+    long current_pos = ftell(file_ptr);
+    fseek(file_ptr, 0, SEEK_END);
+    long file_size = ftell(file_ptr);
+    int bytes_per_line = (file_size - current_pos) / *num_of_documents;
+    fseek(file_ptr, current_pos, SEEK_SET);
+
+    char *buffer = malloc((bytes_per_line + 2) * sizeof(char));
+
+    for(int line = 0; line < *num_of_documents; line++){
+        int id = -1;
+        int subjects = 0;
+
+        fgets(buffer, bytes_per_line + 2, file_ptr);
+        char *values = strtok(buffer, " ");
+
+        while(values != NULL && strcmp("\n", values) != 0){
+            if(id != -1){
+                sscanf(values, "%lf", &(*scores)[FIND(id, *num_of_subjects, subjects)]);
+                subjects++;
+            } else {
+                sscanf(values, "%d", &id);
+            }
+            values = strtok(NULL, " ");
+        }
+    }
+
+    free(buffer);
+    fclose(file_ptr); 
+    return 0;
+}
+
