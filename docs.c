@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define OUTPUT 0
+#define OUTPUT 1
 
 #define FIND(item_offset, num_of_subitens, subitem_offset) ((item_offset * num_of_subitens) + subitem_offset)
 
@@ -58,108 +58,93 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 	int *num_docs_in_cab = calloc(num_cabs, sizeof(int));
 	int doc_change;
 	
-	#pragma omp parallel
-	{
+
 		//initial round-robin; 
-		#pragma omp for reduction(+:num_docs_in_cab[:num_cabs])
+		#pragma omp parallel for 
 		for (int doc = 0; doc < num_docs; doc++){
 			int cab_id = doc % num_cabs;
 			docs_cabs[doc] = cab_id;
-
-			num_docs_in_cab[cab_id] += 1;
 		}
 		
-		
-		#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
-		for(int doc = 0; doc < num_docs; doc++){
-    		int cab_id = doc % num_cabs;
-    		for(int sub = 0; sub < num_subs; sub++)
-        		cab_scores[FIND(cab_id, num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
-		}
-
-		#pragma omp for simd
-		for(int cab_score = 0; cab_score<num_cabs*num_subs; cab_score++){
-			int cab_id = cab_score / num_subs;
-			if(num_docs_in_cab[cab_id] == 0) continue;
-
-			cab_scores[cab_score] /= num_docs_in_cab[cab_id];
-		}
-	}
-		
-
-	//change docs until no changes loop...
-	do{	
-		#pragma omp parallel
-		{
-
-		#pragma omp single
-		doc_change = 0;
-
-		//calculate distances
-		#pragma omp for 
-		for(int doc = 0; doc < num_docs; doc++){
-			for(int cab = 0; cab < num_cabs; cab++){
-				double sum = 0;
-				for(int sub = 0; sub < num_subs; sub++){
-					double dif = docs_scores[FIND(doc, num_subs, sub)] - cab_scores[FIND(cab, num_subs, sub)];
-					sum += dif*dif;
-				}
-				doc_distances[FIND(doc, num_cabs, cab)] = sum; 
-			}
-		}
-
-		//change documents based on distances
-		#pragma omp for
-		for(int doc = 0; doc < num_docs; doc++){
-			double smallest_dist = doc_distances[FIND(doc, num_cabs, docs_cabs[doc])];
-			int closer_cab = docs_cabs[doc];
-			for(int cab = 0; cab<num_cabs; cab++){
-				if( doc_distances[(doc*num_cabs)+cab] < smallest_dist){
-					smallest_dist = doc_distances[FIND(doc, num_cabs, cab)];
-					closer_cab = cab;
-				}
-			}
-
-			#pragma omp critical
+		//change docs until no changes loop...
+		do{
+			#pragma omp parallel shared(doc_change)
 			{
-			if(docs_cabs[doc] != closer_cab){
-				doc_change = 1;
-				//remove one doc from cabinet
-				num_docs_in_cab[docs_cabs[doc]] -= 1;
-				//add one doc to new cab
-				num_docs_in_cab[closer_cab] += 1;
-				//change cab doc is
-				docs_cabs[doc] = closer_cab;
+			
+			#pragma omp single
+			doc_change = 0;
+
+			#pragma omp for reduction(+:num_docs_in_cab[:num_cabs])
+			for(int doc = 0; doc < num_docs; doc++){
+				num_docs_in_cab[docs_cabs[doc]] += 1;
 			}
 
+			//calculate new scores
+			#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
+			for(int doc = 0; doc < num_docs; doc++){
+				#pragma omp simd
+				for(int sub = 0; sub < num_subs; sub++){	
+					cab_scores[FIND(docs_cabs[doc], num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
+				}
 			}
-		}
-		
+
+			#pragma omp for simd 
+			for(int cab_score = 0; cab_score < num_cabs*num_subs; cab_score++){
+				int cab_id = cab_score / num_subs;
+				if(num_docs_in_cab[cab_id] == 0) {
+					cab_scores[cab_score] = 0;
+				}else{
+					cab_scores[cab_score] /= num_docs_in_cab[cab_id];
+				}
+			}
+			
+
+			//calculate distances
+			#pragma omp for 
+			for(int doc = 0; doc < num_docs; doc++){
+				for(int cab = 0; cab < num_cabs; cab++){
+					double sum = 0;
+					#pragma omp simd reduction(+:sum) 
+					for(int sub = 0; sub < num_subs; sub++){
+						double dif = docs_scores[FIND(doc, num_subs, sub)] - cab_scores[FIND(cab, num_subs, sub)];
+						sum += dif*dif;
+					}
+
+					doc_distances[FIND(doc, num_cabs, cab)] = sum; 
+				}
+			}
+
+
+			//change documents based on distances
+			#pragma omp for reduction(|: doc_change)
+			for (int doc = 0; doc < num_docs; doc++) {
+    			double min_dist = doc_distances[doc * num_cabs + 0];
+    			int closer_cab = 0;
+
+    			for (int cab = 0; cab < num_cabs; cab++) {
+        			double dist = doc_distances[doc * num_cabs + cab];
+        			if (dist < min_dist) {
+            			min_dist = dist;
+            			closer_cab = cab;
+        			}
+    			}
+				
+				if(docs_cabs[doc] != closer_cab){
+   			 		doc_change = 1;
+					docs_cabs[doc] = closer_cab;
+				}
+
+			}
+
 		#pragma omp single
-		memset(cab_scores, 0, num_cabs * num_subs * sizeof(double));
-
-		//calculate new scores
-		#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
-		for(int doc = 0; doc < num_docs; doc++){
-			for(int sub = 0; sub < num_subs; sub++){	
-				cab_scores[FIND(docs_cabs[doc], num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
-			}
-		}
-		
-		#pragma omp for simd 
-		for(int cab_score = 0; cab_score < num_cabs*num_subs; cab_score++){
-			int cab_id = cab_score / num_subs;
-			if(num_docs_in_cab[cab_id] == 0) {
-				cab_scores[cab_score] = 0;
-			}else{
-				cab_scores[cab_score] /= num_docs_in_cab[cab_id];
-			}
+		{
+			memset(cab_scores, 0, num_cabs * num_subs * sizeof(double));
+			memset(num_docs_in_cab, 0, num_cabs * sizeof(int));
 		}
 
-		}
-
-
+	}
 	}while(doc_change);
+	
 	
 	free(cab_scores);
 	free(doc_distances);
