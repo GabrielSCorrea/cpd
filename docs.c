@@ -58,7 +58,6 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 	int *num_docs_in_cab = calloc(num_cabs, sizeof(int));
 	int doc_change;
 	
-
 		//initial round-robin; 
 		#pragma omp parallel for 
 		for (int doc = 0; doc < num_docs; doc++){
@@ -74,20 +73,18 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 			#pragma omp single
 			doc_change = 0;
 
-			#pragma omp for reduction(+:num_docs_in_cab[:num_cabs])
-			for(int doc = 0; doc < num_docs; doc++){
-				num_docs_in_cab[docs_cabs[doc]] += 1;
-			}
-
 			//calculate new scores
-			#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs])
+			#pragma omp for reduction(+:cab_scores[:num_cabs*num_subs], num_docs_in_cab[:num_cabs])
 			for(int doc = 0; doc < num_docs; doc++){
 				#pragma omp simd
 				for(int sub = 0; sub < num_subs; sub++){	
 					cab_scores[FIND(docs_cabs[doc], num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
 				}
+				
+				num_docs_in_cab[docs_cabs[doc]] += 1;
 			}
 
+			//finish calculating score with the division by the number of documents in each cabinets
 			#pragma omp for simd 
 			for(int cab_score = 0; cab_score < num_cabs*num_subs; cab_score++){
 				int cab_id = cab_score / num_subs;
@@ -97,7 +94,6 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 					cab_scores[cab_score] /= num_docs_in_cab[cab_id];
 				}
 			}
-			
 
 			//calculate distances
 			#pragma omp for 
@@ -109,11 +105,9 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 						double dif = docs_scores[FIND(doc, num_subs, sub)] - cab_scores[FIND(cab, num_subs, sub)];
 						sum += dif*dif;
 					}
-
 					doc_distances[FIND(doc, num_cabs, cab)] = sum; 
 				}
 			}
-
 
 			//change documents based on distances
 			#pragma omp for reduction(|: doc_change)
