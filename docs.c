@@ -29,7 +29,8 @@ int main(int argc, char **argv){
 	//[D0S0, D0S1, D0S2, D1S0, D1S2...]
 	//array with the cabinet of document equal to the index
 	int *docs_cabs = malloc(num_of_documents * sizeof(int));
-
+	omp_set_num_threads(8);
+	
 	exec_time_omp = -omp_get_wtime();
 	sort_documents_omp(num_of_cabinets, num_of_documents, num_of_subjects, docs_cabs, scores);
 	exec_time_omp += omp_get_wtime();
@@ -47,7 +48,6 @@ int main(int argc, char **argv){
 
 	return 0;
 }
-
 
 int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs, double *docs_scores){
 	double *cab_scores = calloc(num_cabs * num_subs, sizeof(double)); // subjects scores of each cabinet
@@ -112,7 +112,7 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 
 		aux = -omp_get_wtime();
 		//calculate distances
-		#pragma omp for nowait 
+		#pragma omp for schedule(guided) nowait 
 		for(int doc = 0; doc < num_docs; doc++){
 			for(int cab = 0; cab < num_cabs; cab++){
 				double sum = 0;
@@ -127,12 +127,11 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 		l3 += aux;
 		#pragma omp barrier
 		
-
 		aux = -omp_get_wtime();
 		//change documents based on distances
-		#pragma omp for nowait 
+		#pragma omp for reduction(|: doc_change) nowait 
 		for (int doc = 0; doc < num_docs; doc++) {
-    		double min_dist = doc_distances[doc * num_cabs + 0];
+    		double min_dist = 1e99;
     		int closer_cab = 0;
 
     		for (int cab = 0; cab < num_cabs; cab++) {
@@ -144,7 +143,6 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
     		}
 				
 			if(docs_cabs[doc] != closer_cab){
-				#pragma omp critical
    			 	doc_change = 1;
 				docs_cabs[doc] = closer_cab;
 			}
@@ -169,7 +167,6 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 	fprintf(stderr, "Loop 4: %.3fs - t%d \n ", l4, omp_get_thread_num());
 
 	} // end parallel region
-	
 	
 	free(cab_scores);
 	free(doc_distances);
