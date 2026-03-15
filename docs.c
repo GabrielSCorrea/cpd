@@ -34,7 +34,7 @@ int main(int argc, char **argv){
 	sort_documents_omp(num_of_cabinets, num_of_documents, num_of_subjects, docs_cabs, scores);
 	exec_time_omp += omp_get_wtime();
 	
-	fprintf(stderr, "%.3fs\n", exec_time_omp);
+	fprintf(stderr, "%.1fs\n", exec_time_omp);
 
 	if(OUTPUT){
 		for(int i = 0; i < num_of_documents; i++){
@@ -76,14 +76,15 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 		doc_change = 0;
 
 		//calculate new scores
-		#pragma omp for reduction(+:num_docs_in_cab[:num_cabs])
+		#pragma omp for 
 		for(int doc = 0; doc < num_docs; doc++){
 			#pragma omp simd 
 			for(int sub = 0; sub < num_subs; sub++){
 				#pragma omp atomic
 				cab_scores[FIND(docs_cabs[doc], num_subs, sub)] += docs_scores[FIND(doc, num_subs, sub)];
 			}
-				
+			
+			#pragma omp atomic
 			num_docs_in_cab[docs_cabs[doc]] += 1;
 		}
 
@@ -113,7 +114,7 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 		}
 
 		//change documents based on distances
-		#pragma omp for 
+		#pragma omp for reduction(|:doc_change) 
 		for (int doc = 0; doc < num_docs; doc++) {
     		double min_dist = doc_distances[doc * num_cabs + 0];
     		int closer_cab = 0;
@@ -127,7 +128,6 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
     		}
 				
 			if(docs_cabs[doc] != closer_cab){
-				#pragma omp critical
    			 	doc_change = 1;
 				docs_cabs[doc] = closer_cab;
 			}
