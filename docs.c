@@ -62,7 +62,7 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 	{
 	
 	//initial round-robin; 
-	#pragma omp for simd 
+	#pragma omp for simd nowait 
 	for (int doc = 0; doc < num_docs; doc++){
 		int cab_id = doc % num_cabs;
 		docs_cabs[doc] = cab_id;
@@ -100,7 +100,7 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 		}
 
 		//calculate distances
-		#pragma omp for schedule(guided) 
+		#pragma omp for  
 		for(int doc = 0; doc < num_docs; doc++){
 			for(int cab = 0; cab < num_cabs; cab++){
 				double sum = 0;
@@ -133,7 +133,7 @@ int sort_documents_omp(int num_cabs, int num_docs, int num_subs, int *docs_cabs,
 			}
 		}
 
-		#pragma omp single
+		#pragma omp single nowait
 		{
 			memset(cab_scores, 0, num_cabs * num_subs * sizeof(double));
 			memset(num_docs_in_cab, 0, num_cabs * sizeof(int));
