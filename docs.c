@@ -157,28 +157,16 @@ int process_input(char* filename, int* num_of_cabinets, int* num_of_documents, i
         fprintf(stderr, "Error open input file\n");
         return -1;
     }
-
     char reader[100];
     fgets(reader, 100, file_ptr);
     sscanf(reader, "%d %d %d", num_of_cabinets, num_of_documents, num_of_subjects);
-
     *scores = malloc((*num_of_documents) * (*num_of_subjects) * sizeof(double));
-
-    long current_pos = ftell(file_ptr);
-    fseek(file_ptr, 0, SEEK_END);
-    long file_size = ftell(file_ptr);
-    int bytes_per_line = (file_size - current_pos) / *num_of_documents;
-    fseek(file_ptr, current_pos, SEEK_SET);
-
-    char *buffer = malloc((bytes_per_line + 2) * sizeof(char));
-
+    char *buffer = malloc(4096 * sizeof(char));
     for(int line = 0; line < *num_of_documents; line++){
         int id = -1;
         int subjects = 0;
-
-        fgets(buffer, bytes_per_line + 2, file_ptr);
+        fgets(buffer, 4096, file_ptr);
         char *values = strtok(buffer, " ");
-
         while(values != NULL && strcmp("\n", values) != 0){
             if(id != -1){
                 sscanf(values, "%lf", &(*scores)[FIND(id, *num_of_subjects, subjects)]);
@@ -189,9 +177,7 @@ int process_input(char* filename, int* num_of_cabinets, int* num_of_documents, i
             values = strtok(NULL, " ");
         }
     }
-
     free(buffer);
     fclose(file_ptr); 
     return 0;
 }
-
